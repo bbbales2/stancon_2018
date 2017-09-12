@@ -1,0 +1,271 @@
+---
+title: "Estimating Elastic Constants with Stan"
+output:
+  html_notebook: default
+  html_document: default
+---
+
+## (or how to mix C++/C/Fortran codes into Stan)
+
+This is a write-up of the experience we (two engineering graduate students at UC Santa Barbara) had integrating some custom software (a model of mechanical resonance in linear elastic materials) into Stan.
+
+We started off using Bayesian inference on our problem because the optimization techniques we tried were just not giving us consistent results. At the recommendation of a coworker, we made a small sampler using Radford Neal's 2012 paper \cite{radford2012} and it surprised us how well it worked (and how consistently reasonable the answers were). 
+
+Our instincts when we started working on this is that our problem was relatively simple and so could be solved and understood with relatively simple optimization techniques. The experiment with HMC showed us that we were quite wrong. Even though our problem was simple from a mechanics perspective (just two or three mechanical parameters), doing inference on top of that was no small feat. Optimization for us was a no go (too many initial conditions led to wrong answers) and even HMC (though more robust than optimization) had its own problems (picking timesteps and effective parameter masses in particular). We eventually decided to go all-in and switch all our code to Stan to take advantage of the Stan samplers and modeling language.
+
+Hopefully it is useful to other folks wanting to implement their own custom solvers in Stan (be they for fancy PDEs or strange ODEs or whatever weird types of solvers that are needed).
+
+Shoutouts to Ben Goodrich and Bob Carpenter for walking us through this originally. The implementation here takes advantage of special interfaces in cmdStan. I'm not sure how well any of this information transfers to the other interfaces (RStan, PyStan, MatlabStan \ldots).
+
+The outline of this is as follows. Section \ref{mechanics} walks through some application specific background for the problem. It is fair to skip this, but it should help you understand the example model and various functions later. Section \ref{model} describes the example model we want to build. Once we write an example Stan model, we can feed it to cmdStan and cmdStan can tell us exactly what C++ functions to write. Once we implement these functions, it is relatively straightforward (though the errors can be mysterious) to hook our software up to Stan. Section \ref{results} quickly goes over some actual data.
+
+This notebook goes through how we (Brent Goodlet and myself) used Stan to solve a problem we had. It's an exciting story to us because we took a project that was on the short-list to get canned and turned the result into a nice paper and the last bit of Brent's PhD. (This is ignoring, of course, our monumental contributions to science, but as a well read audience you have surely heard about these already).
+
+## Application Background (Optional)
+
+The problem we worked on was the inference bit of Resonance Ultrasound Spectroscopy (or more shortly, RUS). RUS is the process of extracting elastic constants of materials by measuring the resonance modes of a sample of that material. Probably the most famous example of mechanical resonance is the Tacoma Narrows Bridge Failure, where wind agitated the bridge near a resonance mode of the structure and led to it being called a the Tacoma Narrows Bridge Failure rather than the Tacoma Narrows Bridge. The key to RUS is understanding that the location of the bridges resonance modes are a function of its elastic properties (how difficult it is to stretch and deform) and its shape. For the most part, we know how things are shaped and we can measure where they resonate. The thing we want to back out of this are the material elastic properties.
+
+[Picture of tacoma narrows bridge, caption: It would be a disservice to Mechanical Engineers everywhere if I didn't talk about this in my presentation]
+
+Long story short, we can't do this for structures so complicated as the Tacoma Narrows Bridge, and we aren't that interested in those materials anyway. The driving application here are gas turbines (see: jet engines, and land based power generation). Basically all the critical components of a gas turbine (the blades, the rotor, the housing, ...) are made of superalloys, and it's the elastic constants of superalloys that we want to know. As far as superalloys are concerned, that's just a fancy name for a set of metals that retain their structural integrity at very high temperatures.
+
+[Diagram of the evolution of superalloys over time]
+
+For superalloys, RUS gives us a few things:
+
+1. Accurate estimates of elastic constants (conventional mechanical testing only accurate to 10%~ or so)
+2. A way to evaluate the mechanical properties of materials at high operating temperatures (we're not quite there yet, but I know the collaborators are moving in this direction and I'm excited to see how it works)
+3. A non-destructive way to evaluate samples (the catch here is that getting samples requires cutting them out of blades, which naturally destroys the blades, so from some perspectives I'm lieing here)
+
+This all goes into operating turbines safely at high temperatures (which makes them more efficient).
+
+As an example of what happens 
+
+[Picture of before and after superalloy rafted microstructure]
+
+## Basic Mechanics (Again, optional, but c'mon)
+
+Our application is in three dimensions, but we'll start with 1-dimensional problem, that of a series of point masses connected by massless, perfectly linear springs.
+
+
+<!-- ```{r, fig.width = 10, fig.height = 1, echo = FALSE} -->
+<!-- library(tidyverse) -->
+<!-- library(ggplot2) -->
+
+<!-- N = 10 -->
+
+<!-- list(x = seq(0.0, 1.0, length = N), y = rep(0, N)) %>% as.tibble %>% -->
+<!--   ggplot(aes(x, y)) + -->
+<!--   geom_point() + -->
+<!--   geom_line() + -->
+<!--   theme(axis.title.y = element_blank(), -->
+<!--         axis.text.y = element_blank(), -->
+<!--         axis.ticks.y = element_blank(), -->
+<!--         panel.background = element_blank()) -->
+<!-- ``` -->
+Because the springs are linear, we can model the forces in this system with Hooke's law. This assumes there is only one constant ($k$) which determines the elastic properties of the material:
+
+\begin{align}
+F = -k d\\
+\end{align}
+
+$F$ is force exerted by the spring, $d$ is displacement of the spring away from its resting length, $k$ is the spring constant.
+
+Assuming all the springs in our system have the same elastic constant, and all the point masses weight the same, we can sum the forces and write out the ODE which governs the movement of each point mass. Because of the resting lengths, instead of writing the ODEs in terms of the displacements ($d_i$) of the point masses from their resting position.
+
+\begin{align}
+m \frac{\partial ^2 d_i}{\partial t^2} = -k (d_i - d_{i - 1}) + k (d_{i + 1} - d_i) \\
+m \frac{\partial ^2 d_i}{\partial t^2} = k (d_{i - 1} - 2 d_i + d_{i + 1})
+\end{align}
+
+In matrix form, this is:
+
+\begin{equation}
+m \frac{\partial ^2 d}{\partial t^2} = -\begin{bmatrix}
+    -2 k  &  k & 0 &  \\
+    k  &  -2 k & k &  \\
+    0  &  k & -2 k &  \\
+       &    &   & \ldots
+\end{bmatrix} d
+\end{equation}
+
+The matrix on the right hand side is called the stiffness matrix (and usually denoted $K$ for short). Because resonance is a steady state phenomena and we're working with linear systems, we can instead look at the Fourier transform of our system:
+
+\begin{align}
+\omega^2 m \hat{d} = -K \hat{d}
+\end{align}
+
+The square root of the eigenvalues ($\omega^2$) of this discrete problem approximate the resonance modes in the actual system. Ideally we can measure some resonance modes and then solve the inverse problem to back out exactly what $k$ was.
+
+## Stan Model (You'll want to tune in here)
+
+This is about to get complicated. We're going to generate data and then work through three versions of the same model:
+
+1. The first will be the generic model written entirely in Stan
+2. The second will be the same except the eigenvalue calculation is done in C++ and autodiffed automatically by Stan (via Eigen)
+3. The third will be the same but now the eigenvalue calculation as well as the gradient calculation are done externally (in LAPACK) and then provided to Stan.
+
+### Generating data
+First, let's generate some example resonance data from a known elastic constant (with a little Gaussian noise). To keep things fast, we'll stick with N = 10 point masses in the system. Also, we'll ignore the smallest eigenvalue in this system (it's always zero).
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(rstan)
+
+k = 1.7 # This is what we'll try to estimate
+m = 1.0 # This is the mass of the load
+N = 10 # Discreization of domain
+sigma = 0.1 # Noise scale
+
+x = seq(0.0, 1.0, length = N)
+K = matrix(0, nrow = N, ncol = N)
+
+for(n in 1:N) {
+  # we bring the negative sign and mass
+  # to the right side before computing the eigenvalues
+  if(n == 1) {
+    K[n, n] = k / m;
+    K[n, n + 1] = -k / m;
+  } else if(n == N) {
+    K[n, n - 1] = -k / m;
+    K[n, n] = k / m;
+  } else {
+    K[n, n - 1] = -k / m;
+    K[n, n] = 2 * k / m;
+    K[n, n + 1] = -k / m;
+  }
+}
+
+r = eigen(K, symmetric = TRUE)
+
+# Ignore the first eigenvalue, it's always
+eigenvalues = rev(r$values)[2 : N]
+
+# Remember, the resonance modes we measure are the square roots of the eigenvalues!
+data = list(y = sqrt(eigenvalues)) %>% as.tibble %>%
+  mutate(ynoise = y + rnorm(nrow(.), 0, sigma))
+
+data$ynoise
+```
+These are the noisy measurements of the resonance modes of the system.
+
+<!-- ```{r} -->
+<!-- eigenvectors = r$vectors[, N : (N - 3)] -->
+
+<!-- eigenvectors %>% as.tibble %>% -->
+<!--   mutate(x = x) %>% -->
+<!--   gather(eigenvector, d, 1:4) %>% -->
+<!--   ggplot(aes(x, d)) + -->
+<!--   geom_line(aes(group = eigenvector, color = eigenvector)) + -->
+<!--   geom_line(aes(group = eigenvector, color = eigenvector)) -->
+<!-- ``` -->
+
+### Entirely Stan Model
+Now, we just repeat these calculations in a Stan model to do our inference:
+```
+data {
+  int<lower = 1> N; // Number of point masses
+  real<lower = 0.0> y[N - 1]; // Measured resonance modes
+  real m; // Mass of point masses
+}
+transformed data {
+  // We just build the matrix once and then scale it by k
+  matrix[N, N] K_unscaled = rep_matrix(0, N, N);
+  
+  for(n in 1:N) {
+    if(n == 1) {
+      K_unscaled[n, n] = 1.0 / m;
+      K_unscaled[n, n + 1] = -1.0 / m;
+    } else if(n == N) {
+      K_unscaled[n, n - 1] = -1.0 / m;
+      K_unscaled[n, n] = 1.0 / m;
+    } else {
+      K_unscaled[n, n - 1] = -1.0 / m;
+      K_unscaled[n, n] = 2.0 / m;
+      K_unscaled[n, n + 1] = -1.0 / m;
+    }
+  }
+}
+parameters {
+  real<lower = 0.0> k;
+  real<lower = 0.0> sigma;
+}
+transformed parameters {
+  vector[N - 1] eigs;
+  
+  {
+    matrix[N, N] K = k * K_unscaled;
+    
+    // Technically, the eigenvalues of the scaled matrix are just scaled
+    //   versions of the eigenvalues of the unscaled matrix. But this
+    //   optimization isn't possible in the general problem
+    eigs = eigenvalues_sym(K)[2:N];
+  }
+}
+model {
+  k ~ normal(1.0, 1.0);
+  sigma ~ normal(0.0, 1.0);
+  
+  y ~ normal(sqrt(eigs), sigma);
+}
+```
+
+```{r, results="hide"}
+fit = stan("models/spring_example.stan", data = list(N = N,
+                                                     M = nrow(data),
+                                                     y = data$ynoise,
+                                                     m = m), iter = 1000, chains = 4, cores = 4)
+```
+```{r}
+print(fit, pars = c("k", "sigma"))
+```
+Not too shabby! The posterior contains the answer we were looking for and the n_eff and Rhat values look good.
+
+### Eigenvalues with Eigen
+
+```{r}
+model = stan_model("models/spring_example_external.stan",
+                   allow_undefined = TRUE,
+                   includes = paste0('\n#include "', file.path(getwd(), 'eigenvalues_eigen.hpp'), '"\n'))
+```
+```{r}
+fit = sampling(model, data = list(N = N,
+                                  M = nrow(data),
+                                  y = data$ynoise,
+                                  m = m), iter = 1000, chains = 4, cores = 4)
+```
+```{r}
+fit
+```
+
+### Eigenvalues with LAPACK
+
+#### Doing the calculations in C
+
+#### Linking against weird libraries
+
+1D example connecting to C
+linking to Lapack
+
+#### Example (Titanium)
+
+
+#### More Mechanics
+Math of more more complicated models
+
+CMSX4 Example with real data
+
+#### The End (Simple examples)
+
+That's it folks. Feel free to contact me at bbbales2@gmail.com (or on the Stan forums)
+
+#### Technical references
+
+
+More details about more complicated models
+
+
+```{r}
+a
+```
