@@ -19,23 +19,21 @@ Extension: simple_tables, multiline_tables
 
 This is a write-up of the experience we (two engineering graduate students at UC Santa Barbara) had integrating some custom software (a model of mechanical resonance in linear elastic materials) into Stan.
 
-We started off using Bayesian inference on our problem because the optimization techniques we tried were just not giving us consistent results. At the recommendation of a coworker, we made a small sampler using Radford Neal's "MCMC Using Hamiltonian Dynamics" paper [@radford2012] and it surprised us how well it worked (and how consistently reasonable the answers were). Eventually we moved to Stan to take advantage advanced samplers and modeling language flexibility.
+We started off using Bayesian inference on our problem because the optimization techniques we tried weren't working. At the recommendation of a coworker, we made a small sampler using Radford Neal's "MCMC Using Hamiltonian Dynamics" paper [@radford2012] and it surprised us how well it worked (and how consistently reasonable the answers were). Eventually we moved to Stan to take advantage advanced samplers and modeling language flexibility.
 
-We'll save the preaching for the conclusion, but it's our opion that everyone out there with little science codes should be hooking them up to Stan. Be they weird ODEs, or complex PDEs, or whatever. This notebook is here to facilitate this migration!
+We'll save the preaching for the conclusion, but it's our opion that everyone out there with little science codes should be hooking them up to Stan. Be they weird ODEs, or complex PDEs, or whatever. This notebook is here to facilitate this.
 
 Shoutouts to Ben Goodrich and Bob Carpenter for walking us through this originally. The implementation here takes advantage of special interfaces in RStan and CmdStan. I'm not sure how well any of this information transfers to the other interfaces (PyStan, MatlabStan, ...).
 
-We start with a little background on our problem. The background is optional, but it should help motivate what we're doing. We then walk through the math for a simple 1D version of our problem, how to implement this in Stan and eventually how to interface external software with Stan to solve this problem (that uses efficient, custom gradients instead of relying entirely on autodiff). Finally we go over a couple examples of how this model is applied to real data and the results from this (along with a discussion of the modeling weaknesses).
+We start with a little background on our problem. It's optional, but it should help motivate what we're doing. We then walk through the math for a simple 1D version of our problem, how to implement this in Stan and eventually how to interface external software with Stan to solve this problem (that uses efficient, custom gradients instead of relying entirely on autodiff). Finally we go over a couple examples of how this model is applied to real data and the results from this (along with a discussion of where the model fails).
 
 ## Application Background (Optional)
 
 The problem we worked on was the inference bit of Resonance Ultrasound Spectroscopy (or more shortly, RUS). RUS is the process of extracting elastic constants of materials by measuring the resonance modes of a sample of that material (a couple standard references are [@visscher1991c] and [@migliori1993c]). The most famous example of mechanical resonance is the Tacoma Narrows Bridge Failure, where wind agitated the bridge near a resonance mode of the structure and led to its collapse. The key to RUS is understanding that the location of the bridges resonance modes are a function of its elastic properties (how difficult it is to stretch and deform) and its shape. For the most part, we know how things are shaped and we can measure where they resonate. The thing we want to back out of this are the material elastic properties.
 
-[Picture of tacoma narrows bridge, caption: It would be a disservice to Mechanical Engineers everywhere if I didn't talk about this in my presentation]
+![*A mechanical engineering presentation without the Tacoma Narrows Bridge? No way. (image stolen from Wikipedia)*](Image-Tacoma_Narrows_Bridge1.gif)
 
 Long story short, we can't do this for structures so complicated as the Tacoma Narrows Bridge, and we aren't that interested in those materials anyway. The driving application here are gas turbines (see: jet engines, and land based power generation). Basically all the critical components of a gas turbine (the blades, the rotor, the housing, ...) are made of special, high temperature metals called "superalloys". It's the elastic constants of superalloys that we want to know.
-
-[Diagram of the evolution of superalloys over time]
 
 For superalloys, RUS gives us a few things:
 
@@ -55,6 +53,7 @@ It's the mechanical properties of these materials we want to understand.
 
 Our application is in three dimensions, but we'll start with 1-dimensional problem, that of a series of point masses connected by massless, perfectly linear springs.
 
+![](springs.png) 
 
 Because the springs are linear, we can model the forces in this system with Hooke's law. This assumes there is only one constant ($k$) which determines the elastic properties of the material:
 
@@ -286,9 +285,9 @@ But once it's all together, you can bask in all the benefits that Stan modeling 
 
 You can also flirt with the other inference algorithms (ADVI or optimization), but it's probly best to tread lightly there (it was optimization that drove us to Stan in the first place).
 
-That's basically it folks. Feel free to hang around for a quick talk about the results we got in our actual application.
+That's basically it folks. Feel free to hang around for a quick run through of the results we got in our actual application.
 
-## More Inferences
+## More Mechanics
 
 The samples we're interested in are only marginally more complicated than what we've discussed. In modern superalloys, we're almost always interested in single crystal materials. This means that instead of a one parameter elasticity model, we work with somewhere between two and nine constants (depending on the symmetry of the crystal).
 
@@ -326,14 +325,27 @@ C^{\text{effective}}_{ijkl} = q_{ip} q_{jq} C^{\text{unrotated}}_{pqrs} q_{kr} q
 
 We estimate the misorientation ($q$) online. It's possible to measure these things accurately with x-ray diffraction, but it is time consuming and difficult. Instead, we infer it as part of our problem. This means sampling in the space of 3D rotations, which is a bit of a trick.
 
-The code for these calculations is probably not of general interest, but there is a hacked together version of [CmdStan](https://github.com/bbbales2/cmdstan-rus) along with the necessary [extra headers](https://github.com/bbbales2/modal_cpp) that can be used to repeat the calculations here. 
+## Results
+
+The code for these calculations is probably not of general interest, but there is a hacked together version of [CmdStan](https://github.com/bbbales2/cmdstan-rus) along with the necessary [extra headers](https://github.com/bbbales2/modal_cpp) that can be used to repeat the calculations here.
+
+To summarize, the primary issues we encounter with our fits are:
+
+1. Not all chains converge to a reasonable solution (some get stuck in places of parameter space far away from the data). We just discard these. Not terribly satisfying but there's not much else to do.
+2. Computing eigenvalues is expensive (usually matrices are 1000x1000+ in these calculations). Making the calculations high enough resolution to avoid biasing the inferences is difficult.
+3. The posteriors are frighteningly tight (we're a little bit off in no-mans land here -- nothing to compare against).
+4. Orientations are a real pain to work with.
 
 ### Titanium results (cubic symmetry, no misorientation necessary)
-This calculation was done with 4 chains, 500 warmup iterations and 500 post-warmup iterations.
+This calculation was done with four chains, 500 warmup iterations and 500 post-warmup iterations. For the example chains I ran for StanCon, two out of the four failed to find a reasonable answer.
 
-The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/ti.20modes.dat) are available on Github as a part of a [modified (read: hacked together) CmdStan](https://github.com/bbbales2/cmdstan-rus).
+The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/ti.20modes.dat) are available on Github.
 
-The reference values for the table come from [@fisher1964].
+The posterior predictives for the two simulations that worked
+
+For some illustration of how unreasonable one of the failed fits is, here is a posterior predictive
+
+The reference values for the table come from [@fisher1964]. I included estimates from one of the "unreasonable" chains just to give an idea of what a bad fit looks like.
 
 \begin{align}
   \begin{array}{c c c}
@@ -348,9 +360,9 @@ The reference values for the table come from [@fisher1964].
 
 ### CMSX-4 results (cubic symmetry, must estimate misorientation)
 
-This calculation was done with 4 chains, 500 warmup iterations and 500 post-warmup iterations.
+This calculation was done with four chains, 500 warmup iterations and 500 post-warmup iterations. All four chains converged to the same solutions.
 
-The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic_w_rotations.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cmsx4.20modes.dat) are available on Github as a part of a [modified (read: hacked together) CmdStan](https://github.com/bbbales2/cmdstan-rus).
+The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic_w_rotations.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cmsx4.20modes.dat) are available on Github.
 
 The reference data for the comparison comes from [@sieborger2001].
 
@@ -365,7 +377,20 @@ The reference data for the comparison comes from [@sieborger2001].
   \end{array}
 \end{align}
 
-#### Misorientation (a little boring, but it's the part of the model that isn't great so it's gotta be here)
+Misorientation is a per-sample thing, so instead of referencing literature for a value we measured one ourselves with X-ray.
+
+\begin{align}
+\begin{array}{c c c}
+  \text{Parameter} & \text{XRD measurement} & \text{Bayesian estimate ($\mu \pm \sigma$)} \\
+  \hline % \\
+  w & 0.987 & 0.9884 \pm 0.0003 \\
+  x & -0.00526 & 0.000 \pm 0.0062 \\
+  y & -0.158 & -0.1512 \pm 0.0024\\
+  z & 0.0164 &  0.001 \pm 0.010 \\
+\end{array}
+\end{align}
+
+#### Misorientation (a little boring, but it's a part of the model that isn't great so it's gotta be here)
 Originally we parameterized the misorientations in Stan as quaternions (4 element ```unit_vector```s). There were issues with sampling where the treedepth would max out. The answers seemed physical, but it was just taking a long time to do the inferences. In the end we switched parameterizations of our orientations to Cubochoric coordinates [@degraef]. The treedepths stayed sane, and the results still seemed good.
 
 The difference between the parameterization is that a ```unit_vector[4]``` maps a four parameter volume to a three parameter surface, but the Cubochoric parameterization maps a three dimensional volume to a three dimensional surface (with a volume preserving transformation). I won't pretend that I know how it works, and Betancourt has warned me enough on the forums that I should be suspicious of this topology, so caveat emptor.
@@ -378,18 +403,20 @@ What we mostly do for rotations is just check that the chains are exploring thei
 
 Looking back on the project, the big mistake we made at the beginning was assuming that because we have a simple mechanical problem (linear elasticity is quite easy) that it should also be easy to solve an inference problem attached to this. This is totally untrue. Any inference problem is hard, and even simple models have 
 
-The thing that sampling and Bayesian inference gave us that we really didn't have before is a way to aggressively interrogate our models in a way that our optimization techniques just never did.
+The thing that sampling and Bayesian inference gave us that we really didn't have before is a way to aggressively interrogate our models in a way that our optimization techniques just never did. It's about more than uncertainties. We honestly don't fully trust the uncertainties we get from our models (or at least I don't), and there's no way (just like with any estimation technique) that we could recommend people use this numbers with no safety factors.
 
+The most important thing that Bayesian modeling did for this project was help us really understand out model (and our parameter space). Even now, when we have what we consider a functional model, it is absolutely clear what the weaknesses are (misorientations) and what statistical concepts (data is uncomfortably far outside the posterior estimates, $\hat{R}$ and $n_{eff}$ unattainable) and mathematical concepts (topology issues, multimodal posteriors) are attached to this. It is absolutely clear from the diagnostics what we should do to strengthen our model (collect more X-ray data). This sort of diagnostic information comes for free using Bayesian samplers. It is not nearly so easy to get with other techniques.
 
+It is for this reason that we strongly recommend that anyone who takes their science seriously should be figuring out ways to get their analysis into Stan. For now, it's the most trustworthy blackbox way to analyze problems. If something else comes along, great, but until then, you can find me browsing the Stan Forums (or at bbbales2@gmail.com if you aren't into newfanged webforums).
 
-There's a fair bit of information that we left out here. Particularly, posterior predictives were very important for us in developing and testing our models. We just don't have them here for brevity.
+<!-- There's a fair bit of information that we left out here. Particularly, posterior predictives were very important for us in developing and testing our models. We just don't have them here for brevity. -->
 
-That's basically it folks! Contact me at bbbales2@gmail.com (or on the Stan forums) if you have any questions about any part of this.
+<!-- That's basically it folks! Contact me at bbbales2@gmail.com (or on the Stan forums) if you have any questions about any part of this. -->
 
-This led us to eventually incorporate our stuff into Stan. Long story short, the mistake we made when we started this was assuming that, because our mechanics problem is easy, that inferences on it should be as well. We thought that because our calculation was just a little eigenvalue problem that we didn't need big fancy statistics -- we'd leave that to the people doing Real Computations on big fancy PDEs.
+<!-- This led us to eventually incorporate our stuff into Stan. Long story short, the mistake we made when we started this was assuming that, because our mechanics problem is easy, that inferences on it should be as well. We thought that because our calculation was just a little eigenvalue problem that we didn't need big fancy statistics -- we'd leave that to the people doing Real Computations on big fancy PDEs. -->
 
-In our opinion, everyone needs to be doing proper Bayesian inference on their problems, and the folks with little problems might just be able to. The folks with the big PDEs are in serious trouble.
+<!-- In our opinion, everyone needs to be doing proper Bayesian inference on their problems, and the folks with little problems might just be able to. The folks with the big PDEs are in serious trouble. -->
 
-For the time being, "proper Bayesian inference" means Stan. It's the most trustworthy blackbox way to interrogate a model, and so the thrust of this notebook will be showing how to hook up weird models to Stan, be they fancy PDEs, or weird ODEs, or whatever.
+<!-- For the time being, "proper Bayesian inference" means Stan. It's the most trustworthy blackbox way to interrogate a model, and so the thrust of this notebook will be showing how to hook up weird models to Stan, be they fancy PDEs, or weird ODEs, or whatever. -->
 
 # References
