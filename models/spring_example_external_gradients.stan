@@ -1,5 +1,5 @@
 functions {
-  vector eigenvalues_sym_external(matrix K);
+  vector eigenvalues_sym_external_gradients(matrix K_unscaled, real k);
 }
 data {
   int<lower = 1> N;
@@ -34,7 +34,7 @@ transformed parameters {
   {
     matrix[N, N] K = k * K_unscaled;
     
-    eigs = eigenvalues_sym_external(K)[2:(M + 1)];
+    eigs = eigenvalues_sym_external_gradients(K_unscaled, k)[2:(M + 1)];
   }
 }
 model {
