@@ -9,12 +9,6 @@ Extension: simple_tables, multiline_tables
 
 ---
 
-<style type="text/css">
-.table {
-  width: 40%;
-}
-</style>
-
 ## (or how to mix C++/C/Fortran codes into Stan)
 
 This is a write-up of the experience we (two engineering graduate students at UC Santa Barbara) had integrating some custom software (a model of mechanical resonance in linear elastic materials) into Stan.
@@ -43,11 +37,9 @@ For superalloys, RUS gives us a few things:
 
 This all goes into operating turbines safely at high temperatures (which makes them more efficient).
 
-Perhaps a more interesting picture for folks that ride planes is what a superalloy looks like under a microscope when it is new and after it's been in use for awhile.
+It's the mechanical properties of these materials we want to understand. Here's a picture of a typical RUS cradle with a little sample resting in it.
 
-[Picture of before and after superalloy rafted microstructure]
-
-It's the mechanical properties of these materials we want to understand.
+![](cradle.png)
 
 ## Basic Mechanics (At least kinda pay attention to this)
 
@@ -280,12 +272,12 @@ But once it's all together, you can bask in all the benefits that Stan modeling 
 
 1. Estimate noise, don't just minimize least squares
 2. Handle missing data
-3. Painlessly incorporate models in high level analysis (in our case, maybe a regression of material composition vs. elastic constants is in order)
+3. Do higher level regressions
 4. ...
 
-You can also flirt with the other inference algorithms (ADVI or optimization), but it's probly best to tread lightly there (it was optimization that drove us to Stan in the first place).
+Sometimes it's fun to send a model through the optimizer just to see what sorts of stuff happens.
 
-That's basically it folks. Feel free to hang around for a quick run through of the results we got in our actual application.
+That's basically it folks! Feel free to hang around for a quick run through of the results we got in our actual application.
 
 ## More Mechanics
 
@@ -331,7 +323,7 @@ The code for these calculations is probably not of general interest, but there i
 
 To summarize, the primary issues we encounter with our fits are:
 
-1. Not all chains converge to a reasonable solution (some get stuck in places of parameter space far away from the data). We just discard these. Not terribly satisfying but there's not much else to do.
+1. Not all chains converge to a reasonable solution (some get stuck in places of parameter space far away from the data). We just discard these. It's not terribly satisfying, but there's not much else to do.
 2. Computing eigenvalues is expensive (usually matrices are 1000x1000+ in these calculations). Making the calculations high enough resolution to avoid biasing the inferences is difficult.
 3. The posteriors are frighteningly tight (we're a little bit off in no-mans land here -- nothing to compare against).
 4. Orientations are a real pain to work with.
@@ -380,43 +372,36 @@ The reference data for the comparison comes from [@sieborger2001].
 Misorientation is a per-sample thing, so instead of referencing literature for a value we measured one ourselves with X-ray.
 
 \begin{align}
-\begin{array}{c c c}
-  \text{Parameter} & \text{XRD measurement} & \text{Bayesian estimate ($\mu \pm \sigma$)} \\
-  \hline % \\
-  w & 0.987 & 0.9884 \pm 0.0003 \\
-  x & -0.00526 & 0.000 \pm 0.0062 \\
-  y & -0.158 & -0.1512 \pm 0.0024\\
-  z & 0.0164 &  0.001 \pm 0.010 \\
-\end{array}
+  \begin{array}{c c c}
+    \text{Parameter} & \text{XRD measurement} & \text{Bayesian estimate ($\mu \pm \sigma$)} \\
+    \hline % \\
+    w & 0.987 & 0.9884 \pm 0.0003 \\
+    x & -0.00526 & 0.000 \pm 0.0062 \\
+    y & -0.158 & -0.1512 \pm 0.0024 \\
+    z & 0.0164 &  0.001 \pm 0.010 \\
+  \end{array}
 \end{align}
 
-#### Misorientation (a little boring, but it's a part of the model that isn't great so it's gotta be here)
-Originally we parameterized the misorientations in Stan as quaternions (4 element ```unit_vector```s). There were issues with sampling where the treedepth would max out. The answers seemed physical, but it was just taking a long time to do the inferences. In the end we switched parameterizations of our orientations to Cubochoric coordinates [@degraef]. The treedepths stayed sane, and the results still seemed good.
+You'll notice the lack of $\hat{R}$ and $n_{eff}$ in the orientation table. Because there are numerous symmetries in the crystal and the sample, there are multiple symmetrically equivalent correct answers. I honestly don't know how to go about computing an $\hat{R}$ and $n_{eff}$ in this case. We usually just eyeball the convergence here.
 
-The difference between the parameterization is that a ```unit_vector[4]``` maps a four parameter volume to a three parameter surface, but the Cubochoric parameterization maps a three dimensional volume to a three dimensional surface (with a volume preserving transformation). I won't pretend that I know how it works, and Betancourt has warned me enough on the forums that I should be suspicious of this topology, so caveat emptor.
+It's hard to tell with the summary statistics, but the measured misorientation is kinda outside the posterior here. Its easier to see with a plot of the histogram of minimum angle of rotation between the measured and computed misorientations.
 
-Because there are numerous symmetries in the crystal and the sample, there are multiple symmetrically equivalent correct answers. This means computing $\hat{R}$ and $n_{eff}$ isn't straightforward.
+From this plot we can see that our computed and measured misorientations are within about a degree of each other. From an engineering standpoint, this is pretty close. From a statistics perspective, however, the measurement is outside the posterior, and these sorts of X-ray measurements can be done to within closer than a degree.
 
-What we mostly do for rotations is just check that the chains are exploring their local modes a lot (the traceplots look wiggly). For the CMSX4 data, we measured the crystal-sample misorientation manually (with X-ray), and can compare that with the misorientation computed from the HMC run. In this case, the posterior of distances between the measured misorientation and the the computed misorientations is $__$ degrees. From a physical perspective, it's pretty cool that we were able to get within half a degree. From a Bayesian perspective, it's pretty unnerving the measurement sits that far outside the posterior. We should really collect some more X-ray measurements and see which way the needle swings (is our model okay, or is something wrong) -- that's clear enough.
+For what it's worth, parameterizing our model with quaternions (```unit_vector[4]```s) didn't work that well. The sampler was frequently hitting it's maximum treedepth. There's a thread on it on the [Stan forums](http://discourse.mc-stan.org/t/riemannian-hmc-q/523). In the end we switched to using a Cubochoric parameterization [@degraef] and the treedepth problems went away.
 
 ## Conclusion (Soap-Box)
 
-Looking back on the project, the big mistake we made at the beginning was assuming that because we have a simple mechanical problem (linear elasticity is quite easy) that it should also be easy to solve an inference problem attached to this. This is totally untrue. Any inference problem is hard, and even simple models have 
+Looking back on the project, the big mistake we made at the beginning was assuming that because we have a simple mechanical problem (linear elasticity is quite easy) that it should also be easy to solve an inference problem attached to this. This turned out to be wrong, naturally.
 
-The thing that sampling and Bayesian inference gave us that we really didn't have before is a way to aggressively interrogate our models in a way that our optimization techniques just never did. It's about more than uncertainties. We honestly don't fully trust the uncertainties we get from our models (or at least I don't), and there's no way (just like with any estimation technique) that we could recommend people use this numbers with no safety factors.
+And with all the gotchas and caveats listed above, it's not fair to say we totally solved our inference problem. I don't truly trust out confidence intervals, and I'm not sure I ever will.
 
-The most important thing that Bayesian modeling did for this project was help us really understand out model (and our parameter space). Even now, when we have what we consider a functional model, it is absolutely clear what the weaknesses are (misorientations) and what statistical concepts (data is uncomfortably far outside the posterior estimates, $\hat{R}$ and $n_{eff}$ unattainable) and mathematical concepts (topology issues, multimodal posteriors) are attached to this. It is absolutely clear from the diagnostics what we should do to strengthen our model (collect more X-ray data). This sort of diagnostic information comes for free using Bayesian samplers. It is not nearly so easy to get with other techniques.
+I'm not convinced the product of this all are the uncertainties. What Bayesian inference gave us (and in particular, Stan/NUTS/HMC, whatever) that we did not have before is a way to very aggressively interrogate our models.
 
-It is for this reason that we strongly recommend that anyone who takes their science seriously should be figuring out ways to get their analysis into Stan. For now, it's the most trustworthy blackbox way to analyze problems. If something else comes along, great, but until then, you can find me browsing the Stan Forums (or at bbbales2@gmail.com if you aren't into newfanged webforums).
+Even now, when we have what we consider a functional model, it is very clear what our biggest weaknesses are (the lack of diagnostics on orientations and the fact that sometimes chains don't converge to anything are the biggest). It isn't so easy to get this information, but it comes for free with Stan.
 
-<!-- There's a fair bit of information that we left out here. Particularly, posterior predictives were very important for us in developing and testing our models. We just don't have them here for brevity. -->
+And it is for this reason that we strongly recommend that anyone who takes their science seriously should be figuring out ways to get their analysis into Stan. If something other piece of software comes along, great, but until then, you can find me browsing the Stan Forums (or at bbbales2@gmail.com).
 
 <!-- That's basically it folks! Contact me at bbbales2@gmail.com (or on the Stan forums) if you have any questions about any part of this. -->
-
-<!-- This led us to eventually incorporate our stuff into Stan. Long story short, the mistake we made when we started this was assuming that, because our mechanics problem is easy, that inferences on it should be as well. We thought that because our calculation was just a little eigenvalue problem that we didn't need big fancy statistics -- we'd leave that to the people doing Real Computations on big fancy PDEs. -->
-
-<!-- In our opinion, everyone needs to be doing proper Bayesian inference on their problems, and the folks with little problems might just be able to. The folks with the big PDEs are in serious trouble. -->
-
-<!-- For the time being, "proper Bayesian inference" means Stan. It's the most trustworthy blackbox way to interrogate a model, and so the thrust of this notebook will be showing how to hook up weird models to Stan, be they fancy PDEs, or weird ODEs, or whatever. -->
 
 # References
