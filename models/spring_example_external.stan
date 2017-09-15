@@ -3,8 +3,7 @@ functions {
 }
 data {
   int<lower = 1> N;
-  int<lower = 1> M;
-  real<lower = 0.0> y[M];
+  real<lower = 0.0> y[N - 1];
   real m;
 }
 transformed data {
@@ -29,12 +28,12 @@ parameters {
   real<lower = 0.0> sigma;
 }
 transformed parameters {
-  vector[M] eigs;
+  vector[N - 1] eigs;
   
   {
     matrix[N, N] K = k * K_unscaled;
     
-    eigs = eigenvalues_sym_external(K)[2:(M + 1)];
+    eigs = eigenvalues_sym_external(K)[2:N];
   }
 }
 model {

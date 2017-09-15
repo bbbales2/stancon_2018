@@ -1,18 +1,19 @@
 ---
-title: "Estimating Elastic Constants with Stan"
-author: Ben Bales (UC, Santa Barbara)
+title: "Bayesian Estimation of Mechanical Elastic Constants"
+author: "Ben Bales and Brent Goodlet (University of California, Santa Barbara)"
 bibliography: bibliography.bib
 output:
+  pdf_document: default
   html_notebook: default
   html_document: default
-  pdf_document: default
+nocite: |
+  @stan_math, @cpp_extern
 Extension: simple_tables, multiline_tables
-
 ---
 
-## (or how to mix C++/C/Fortran codes into Stan)
+## (or, more accurately, how we mixed our little science code into Stan and out modeling progress thus far)
 
-This is a write-up of the experience we (two engineering graduate students at UC Santa Barbara) had integrating some custom software (a model of mechanical resonance in linear elastic materials) into Stan.
+This is a write-up of the experience we (two engineering graduate students) had integrating some custom software (a model of mechanical resonance in linear elastic materials) into Stan.
 
 We started off using Bayesian inference on our problem because the optimization techniques we tried weren't working. At the recommendation of a coworker, we made a small sampler using Radford Neal's "MCMC Using Hamiltonian Dynamics" paper [@radford2012] and it surprised us how well it worked (and how consistently reasonable the answers were). Eventually we moved to Stan to take advantage advanced samplers and modeling language flexibility.
 
@@ -24,9 +25,13 @@ We start with a little background on our problem. It's optional, but it should h
 
 ## Application Background (Optional)
 
-The problem we worked on was the inference bit of Resonance Ultrasound Spectroscopy (or more shortly, RUS). RUS is the process of extracting elastic constants of materials by measuring the resonance modes of a sample of that material. A sample's shape and elastic properties (how difficult an object is to stretch and deform) determine its resonance modes. For the most part, we know how things are shaped, and we can measure where they resonate. The thing we want to back out of this are the material elastic properties (a couple standard references on this are [@visscher1991c] and [@migliori1993c]).
+The problem we worked on was the inference bit of Resonance Ultrasound Spectroscopy (or more shortly, RUS). RUS is the process of extracting elastic constants (how difficult an object is to stretch and deform) of a material by measuring the resonance modes (frequencies) of a sample of that material.
 
-The driving application here are gas turbines (see: jet engines, and land based gas power generation). The bits of the gas turbine that need to get hot (the blades and the rotor especially) are made of special, high temperature resistant metals called superalloys. It's the elastic constants of superalloys that we want to know.
+Musical instruments are the standard examples of mechanical resonance at work, though occasionally a bridge will do it as well. The important bit is that the shape and materials of the thing determine at what frequencies it resonates. For the most part, we know how things are shaped, and we can measure where they resonate, and so the RUS game is all about backing out the elastic constants (a couple standard references on this are [@visscher1991c] and [@migliori1993c]).
+
+![*This is the Millenium Bridge in London. When it opened, feedback between people walking on the bridge and small horizontal movements of the bridge drove the bridge until it visibly oscillated (there are good videos of this on [YouTube](https://www.youtube.com/watch?v=eAXVa__XWZ8)). Picture from [Wikipedia](https://upload.wikimedia.org/wikipedia/commons/3/38/Millenium_bridge_2015.jpg)*](millenium_bridge.jpg)
+
+We don't work with musical instruments or bridges though. The driving application here is gas turbines (see: jet engines, and land based gas power generation). The bits of the gas turbine that need to get hot (the blades and the rotor especially) are made of special, high temperature resistant metals called superalloys. It's the elastic constants of superalloys that we want to know.
 
 For superalloys, RUS gives us a few things:
 
@@ -44,7 +49,7 @@ Here's a picture of a typical RUS cradle with a little sample resting in it.
 
 ## Basic Mechanics (At least kinda pay attention to this)
 
-Our application is in three dimensions, but we'll start with 1-dimensional problem, that of a series of point masses connected by massless, perfectly linear springs.
+Our application is in three dimensions, but we'll start with 1-dimensional problem. Here is a series of point masses connected by massless, perfectly linear springs.
 
 ![](springs.png) 
 
@@ -54,9 +59,9 @@ Because the springs are linear, we can model the forces in this system with Hook
 F = -k d\\
 \end{align}
 
-$F$ is force exerted by the spring, $d$ is displacement of the spring away from its resting length, $k$ is the spring constant.
+$F$ is force exerted by the spring (trying to return to its resting length), $d$ is displacement of the spring (away from its resting length), and $k$ is the spring constant.
 
-Assuming all the springs in our system have the same elastic constant, and all the point masses weight the same, we can sum the forces and write out the ODE which governs the movement of each point mass. Because of the resting lengths, instead of writing the ODEs in terms of the displacements ($d_i$) of the point masses from their resting positions.
+Assuming all the springs in our system have the same elastic constant and all the point masses weigh the same, we can sum the forces and write out the ODE which governs the movement of each point mass. The ODEs in terms of the displacements ($d_i$) of the point masses from their resting positions (to avoid the resting length of the springs showing up in the equations).
 
 \begin{align}
 m \frac{\partial ^2 d_i}{\partial t^2} = -k (d_i - d_{i - 1}) + k (d_{i + 1} - d_i) \\
@@ -66,18 +71,18 @@ m \frac{\partial ^2 d_i}{\partial t^2} = k (d_{i - 1} - 2 d_i + d_{i + 1})
 In matrix form, this is:
 
 \begin{equation}
-m \frac{\partial ^2 d}{\partial t^2} = -\begin{bmatrix}
-    -k  &  k & 0 &  \\
-    k  &  -2 k & k &  \\
-    0  &  k & -2 k &  \\
-       &    &   & \ldots
+m \frac{\partial ^2 d}{\partial t^2} = \begin{bmatrix}
+    -k & k & 0 &  \\
+    k  & -2 k & k &  \\
+    0  & k & -2 k &  \\
+       & &      & \ldots
 \end{bmatrix} d
 \end{equation}
 
 The matrix on the right hand side is called the stiffness matrix (and usually denoted $K$ for short). Because resonance is a steady state phenomena and we're working with linear systems, we can instead look at the Fourier transform of our system:
 
 \begin{align}
-m \omega^2 \hat{d} = -K \hat{d} \\
+-m \omega^2 \hat{d} = K \hat{d} \\
 \end{align}
 
 The square root of the eigenvalues ($\omega^2$) of this discrete problem approximate the resonance modes in the actual system. Ideally we can measure some resonance modes and then solve the inverse problem to back out exactly what $k$ was.
@@ -88,9 +93,9 @@ We're going to generate data and then work through three versions of the same mo
 
 1. The first will be the generic model written entirely in Stan
 2. The second will be the same except the eigenvalue calculation is done in C++ and autodiffed automatically by Stan (via Eigen)
-3. The third will be the same but now the eigenvalue calculation as well as the gradient calculation are done externally (still in Eigen) and then provided to Stan.
+3. The third will be the same but now the eigenvalue calculation as well as the gradient calculation are done externally (still in Eigen) and then provided to Stan
 
-The third case is the valuable one. It's the path for hooking into Stan custom calculations that are:
+The third case is the most valuable one. It's the path for hooking into Stan custom calculations that are:
 
 1. Too expensive to practically autodiff (like the eigenvalue calculations we'll need here)
 2. Too complicated to be of general interest to the Stan community
@@ -166,13 +171,13 @@ timing_base = system.time(fit_base <- stan("models/spring_example.stan",
 print(fit_base, pars = c("k", "sigma"))
 print(timing_base)
 ```
-Not too shabby! The posterior contains the answer we were looking for ($k = 1.7$), and the $n_{eff}$ and \hat{R} values look good.
+Not too shabby! The posterior contains the answer we were looking for ($k = 1.7$), and the $\hat{R}$ and $n_{eff}$ values look good.
 
 ### Eigenvalues in templated C++ (with Eigen)
 
-Now, if we have some fancy templated C++ code that solves part of our problem, we can hook that up in Stan and let the autodiff magically compute derivatives of it. There are limits to what the autodiff can do, your mileage may vary. As of Stan 2.17.0, the ```eigenvalues_sym``` function is actually just a wrapper around the Eigen C++ templated eigensolver. We can replace the ```eigenvalues_sym``` function with our own wrapper and open the door to incorporating custom C++ directly in our Stan models!
+Now, if we have some fancy templated C++ code that solves part of our problem, we can hook that up in Stan and let the autodiff magically compute derivatives of it. All the following stuff is more or less shamelessly stolen from the RStan [Vignette on calling external C++ from RStan](https://cran.r-project.org/web/packages/rstan/vignettes/external.html).
 
-Basically all the following stuff is shamelessly stolen from Ben Goodrich's Vignette on calling external C++ from Stan (https://cran.r-project.org/web/packages/rstan/vignettes/external.html).
+As of Stan 2.17.0, the ```eigenvalues_sym``` function is actually just a wrapper around the Eigen C++ templated eigensolver. We can replace the ```eigenvalues_sym``` function with our own wrapper and open the door to incorporating custom C++ directly in our Stan models!
 
 The first step is defining the signature for the function you want to call in your Stan model. In our case, the signature is:
 
@@ -190,13 +195,17 @@ Once we have that, we need to figure out what function we need to define in C++ 
 /home/bbales2/cmdstan/bin/stanc --allow_undefined models/spring_example_external.stan > /dev/null
 grep -m 1 -B2 "eigenvalues_sym_external" spring_example_external_model.cpp
 ```
-This is the function we need to define externally. First, a quick message about types. All functions you interface with Stan will be templated on non-integer types. The two template types you need to worry about (the two types that ```T0__``` can take in this case) are ```double``` and ```var```. Basically, ```double``` is used in situations where no autodiff is needed, and ```var``` is used in places where the autodiff is needed. ```var```s are special types which, when just evaluating functions, act like doubles. In the background, however, they build special evalulation trees which can be used to get the gradients of whatever function they're used in. It's a bit finicky to describe, but to interface with the C++ side of Stan at any reasonable level you'll need to familiarize yourself with them. The best way to do that is the Stan Math paper: https://arxiv.org/abs/1509.07164.
+This is the function we need to define externally.
+
+First, a quick message about types. All functions you interface with Stan will be templated on non-integer types. The two template types you need to worry about (the two types that ```T0__``` can take in this case) are ```double``` and ```var```. Basically, ```double``` is used in situations where no autodiff is needed, and ```var``` is used in places where the autodiff is needed. ```var```s are special types which, when just evaluating functions, act like doubles. In the background, however, they build special evalulation trees which can be used to get the gradients of whatever function they're used in. It's a bit finicky to describe, but to interface with the C++ side of Stan at any reasonable level you'll need to familiarize yourself with them. The best way to do that is the [Stan Math paper](https://arxiv.org/abs/1509.07164).
 
 Either way, our function definition is a bit messy, but it's actually very easy to write (we do this in a separate C++ header file):
 ```{bash}
 cat eigenvalues_eigen.hpp
 ```
-Because we're just passing the ```var```s through, all the gradients we need are computed automatically. Now all we need to do is run the model. We need to tell Rstan to allow undefined functions (so the Stan->C++ compilation will continue even though ```eigenvalues_sym_external``` isn't defined at that point) and the point to the header where the function is actually defined (for more details on this -- it very well may change, look at https://cran.r-project.org/web/packages/rstan/vignettes/external.html):
+Because we're just passing the ```var```s through (well, they're ```T0__```s here, but they will be ```var```s), all the gradients we need are computed automatically. Now all we need to do is run the model.
+
+We need to tell Rstan to allow undefined functions (so the Stan->C++ compilation will continue even though ```eigenvalues_sym_external``` isn't defined at that point) and the point to the header where the function is actually defined (for more details on this, again, check the [Vignette](https://cran.r-project.org/web/packages/rstan/vignettes/external.html)):
 
 ```{r, results="hide"}
 model_external = stan_model("models/spring_example_external.stan",
@@ -219,7 +228,7 @@ Again we've recovered our parameter ($k = 1.7$), good work us!
 
 ### Eigenvalues with custom gradients
 
-The last piece we need to really incoporate custom code in Stan are custom gradients. In particular, for our problem, there's no reason to make the autodiff compute the gradients of a symmetric eigenvalue problem. When they exist, there is a simple analytic form for them [@deleeuw2007]. For the eigenvalue problem (again, I hid $m$ inside the $K$ here)
+The last piece we need to really incorporate custom code in Stan are custom gradients. In particular, for our problem, there's no reason to make the autodiff compute the gradients of a symmetric eigenvalue problem. When they exist, there is a simple analytic form for them [@deleeuw2007]. For the eigenvalue problem (again, I hid $-m$ inside the $K$ here)
 
 \begin{align}
 \omega_i^2 \hat{x} = K \hat{x}
@@ -231,7 +240,7 @@ With eigenvalues $\omega_i^2$ and eigenvectors $\nu_i$, the gradients of the eig
 \frac{\partial \omega_i^2}{\partial k} = \nu_i^T \frac{\partial K}{\partial k} \nu_i
 \end{align}
 
-We can hook these into the Stan math autodiff using the Stan math precomputed_gradients helper (more examples here: https://github.com/stan-dev/math/wiki/Adding-a-new-function-with-known-gradients). If you haven't read the manual yet, now's the time!
+We can hook these into the Stan math autodiff using the Stan math precomputed_gradients helper (more examples [here](https://github.com/stan-dev/math/wiki/Adding-a-new-function-with-known-gradients)). If you haven't read the [Stan Math paper](https://arxiv.org/abs/1509.07164) yet, now's the time!
 
 Since we know $\frac{\partial K}{\partial k}$ is just ```K_unscaled``` as defined in our original Stan model, it's easiest to just pass that and ```k``` in as arguments (instead of autodiffing that matrix manually, which would be unnecessarily costly).
 
@@ -251,7 +260,9 @@ grep -m 1 -B2 -A1 "eigenvalues_sym_external_gradients" spring_example_external_g
 
 The code with the custom autodiffs is complicated by the fact that we need to differentiate between when the template arguments are ```double```s or ```var```s. If the input includes ```var```s, then we need to get all the necessary partial derivatives together and package them in the output. If the input is only ```double```, then we can get away without computing any gradients.
 
-It can be tricky to write functions that work with two types (even if they are closely related). It's possible to just write two separate ```eigenvalues_sym_external``` functions, one defined for ```var```s and one defined for ```double```s.
+It can be tricky to write functions that work with two types (even if they are closely related). The way we handle it here is by sharing the eigenvalue computation, but using C++ function overloading to build the correct return type (if the argument ```k``` to build_output is a ```var```, we know the output must be ```var```s as well).
+
+Note, as the gradients are written here, if ```K_unscaled``` is a Matrix of ```var```s (totally legal in the Stan language) our implementation will fail! If we want to account for that we must do so manually.
 
 ```{bash}
 cat eigenvalues_eigen_gradients.hpp
@@ -274,7 +285,7 @@ print(fit_external_gradients, c("k", "sigma"))
 print(timing_external_gradients)
 ```
 
-Woohoo! Our fit works ($k = 1.7$, and it runs about ten times faster than the original model). This is how you hook up custom external libraries with Stan models. Your mileage may vary, of course (especially if you have to link in other libraries), and it's best to test that the functions (as well as their gradients) are working outside of Stan before you try to incorporate them into a complicated model.
+Woohoo! Our fit works ($k = 1.7$), and it's even a little faster! This is how you hook up custom external libraries with Stan models. Your mileage may vary, of course (especially if you have to link in other libraries), and it's best to test that the functions (as well as their gradients) are working outside of Stan before you try to incorporate them into a complicated model.
 
 Once it's all together though, you can bask in all the benefits that Stan modeling brings (including the optimizer, which makes it really easy to compare your sampling stuff with optimization to justify all that work you did to get your code in Stan).
 
@@ -282,7 +293,7 @@ That's it for the simple demo. Now we'll walk through the results for our full m
 
 ## More Mechanics
 
-In modern superalloys, we're almost always interested in single crystal materials. This means that instead of a one parameter elasticity model, we work with somewhere between two and nine constants (depending on the symmetry of the crystal).
+In modern superalloys, we're almost always interested in single crystal materials. This means that instead of a one parameter elasticity model, we work with somewhere between two and nine parameters (depending on the symmetry of the crystal).
 
 ![*Here's a generic picture inside a gas turbine. Each blade in a modern engine is a single crystal, which implies all the atoms in the entire blade are lined up. Wow! Image from [Wikipedia](https://commons.wikimedia.org/wiki/File:Gas_Turbine_Blade.jpg)*](Gas_Turbine_Blade.jpg)
 
@@ -310,7 +321,7 @@ The single stiffness constant from before turns into a 6x6 matrix of elastic con
 \ldots
 \end{equation}
 
-Also, in single crystal materials, the alignment between the crystal axes and the sample axes (the crystal-sample misorientation) is important. The effective matrix of stiffness coefficients of the specimen can be computed by rotating the matrix the matrix from the unrotated systems. This is done by expressing the the 6x6 compliance matrices as 3x3x3x3 tensors and multiplying by rotation matrices (from [@bower2009], Section 3.2.11)
+Also, in single crystal materials, the alignment between the crystal axes and the sample axes (the crystal-sample misorientation) is important. The effective matrix of stiffness coefficients of the specimen can be computed by rotating the matrix the matrix from the unrotated systems. This is done by expressing the the 6x6 matrices of elastic constants as 3x3x3x3 tensors and multiplying by rotation matrices (from [@bower2009], Section 3.2.11)
 
 \begin{equation}
 C^{\text{effective}}_{ijkl} = q_{ip} q_{jq} C^{\text{unrotated}}_{pqrs} q_{kr} q_{ls}
@@ -326,9 +337,9 @@ The current issues with our modeling are:
 
 1. We work with single sample fits. We are overfitting things at this point
 2. Not all chains converge to a reasonable solution (some get stuck in places of parameter space far away from the data). We just discard these
-3. Computing eigenvalues is expensive (usually matrices are 1000x1000+ in these calculations). Making the calculations high enough resolution to avoid biasing the inference is difficult
-4. The posteriors are frighteningly tight (we're a little bit off in no-mans land here -- nothing to compare against)
-5. Orientations are difficult to work with
+3. The posteriors are frighteningly tight
+4. Orientations are difficult to work with
+5. Computing eigenvalues is expensive (usually matrices are 1000x1000+ in these calculations)
 
 At this point, we don't really trust our confidence intervals. It seems weird saying this in a notebook promoting Bayesian analysis, but we just aren't there yet.
 
@@ -390,7 +401,7 @@ This calculation was done with four chains, 500 warmup iterations and 500 post-w
 
 The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic_w_rotations.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cmsx4.20modes.dat) are available on Github.
 
-As far as the posterior predictive intervals go, things work out
+As far as the posterior predictive intervals go, things work out about the same as before
 ```{r, echo=FALSE}
 fit = read_stan_csv(c('cmsx4.20modes.13.csv',
                       'cmsx4.20modes.14.csv',
@@ -424,7 +435,7 @@ The reference data for the comparison comes from [@sieborger2001].
 
 \begin{align}
   \begin{array}{c | c | c c c | c}
-  \text{Parameter} & \text{Reference (citation in text)} & \text{Estimate ($\mu \pm \sigma$)} & \hat{R} & n_{eff} & \text{"Unreasonable" fit} \\
+  \text{Parameter} & \text{Reference (citation in text)} & \text{Estimate ($\mu \pm \sigma$)} & \hat{R} & n_{eff} & \text{``Unreasonable'' fit} \\
   \hline % \\
   c_{11} & 252 \text{GPa} & 244.2 \pm 1.0 \text{ GPa} & 1.0 & 780 & 120.4 \pm 7.9 \text{ GPa}\\
   c_{44} & 131 \text{GPa} & 130.8 \pm 0.1 \text{ GPa} & 1.0 & 1500 & 327.7 \pm 57.7 \text{ GPa} \\
@@ -433,7 +444,7 @@ The reference data for the comparison comes from [@sieborger2001].
   \end{array}
 \end{align}
 
-You'll no doubt notice the orientation parameters are not given here in tables (even though we said we estimated them). Because there are numerous symmetries in the crystal and the sample, there are multiple symmetrically equivalent correct answers. This multimodality makes it really confusing to try to summarize the orientation parameters in tables. I honestly don't know how to go about computing an $\hat{R}$ and $n_{eff}$ in this case either.
+You'll no doubt notice the orientation parameters are not given here in tables (even though we said we estimated them). Because there are numerous symmetries in the crystal and the sample, there are multiple symmetrically equivalent correct answers. This multimodality makes it really confusing to try to summarize the orientation parameters in tables. I honestly don't even know how to go about computing an $\hat{R}$ and $n_{eff}$ in this case either.
 
 Also, there aren't reference values to compare against. Each sample can have its own orientation. In this case, we measured one ourselves with X-ray. Instead of trying to summarize the orientations, it is easier to see what is going on with a histogram of errors between the angle between the computed and measured orientations.
 
@@ -445,21 +456,19 @@ read_csv("min_angles.txt", col_types = c(col_double()), col_names = c("angles"))
   xlab("Minimum angle of rotation between measured and estimated orientations")
 ```
 
-These sorts of X-ray measurements can be much more precisely than to within a degree. So it is pretty bad we're only within a few degrees of the answer. We're not that confident in the X-ray measurement we did though.
+These sorts of X-ray measurements can be much more precisely than to within a degree. So it is not great we're only within a couple degrees of the answer. We're not that confident in the X-ray measurement we did though.
 
 For what it's worth, parameterizing our model with quaternions (```unit_vector[4]```s) didn't work that well. The sampler was frequently hitting it's maximum treedepth. There's a thread on it on the [Stan forums](http://discourse.mc-stan.org/t/riemannian-hmc-q/523). In the end we switched to using a Cubochoric parameterization [@degraef] and the treedepth problems went away.
 
 ## Conclusion (Soap-Box)
 
-Looking back on the project, the big mistake we made at the beginning was assuming that because we have a simple mechanical problem (linear elasticity is quite easy) that it should also be easy to solve an inference problem attached to this. Hopefully the reader is convinced this is wrong as well.
+Looking back on the project, the big mistake we made at the beginning was assuming that because we have a simple mechanical problem (linear elasticity is quite easy) that it should also be easy to solve an inference problem attached to this. Hopefully the reader is convinced this was a wrong assumption.
 
-And again, with all the problems above, we haven't really solved our inference problem yet. I don't truly trust out confidence intervals, which sounds pretty defeatist from a statistics perspective.
+And again, with all the problems above, we haven't really solved our inference problem yet. I don't truly trust the confidence intervals, which sounds pretty defeatist from a Bayesian modeling perspective.
 
-But I'm not convinced anymore that the confidence intervals are all we might hope to get from Bayesian modeling. We are much closer than ever before to understanding our problem, and Stan is indispensable as a tool for interrogating our models, data, and assumptions.
+But I'm not convinced anymore that the confidence intervals are all we might hope to get from this. We are much closer than ever before to understanding our problem, and Stan is indispensable as a tool for interrogating our models, data, and assumptions. Even now, when we have what we consider a functional model, it is very clear what our biggest weaknesses are and how we might address these concerns.
 
-Even now, when we have what we consider a functional model, it is very clear what our biggest weaknesses are and how we might address these concerns.
-
-And it is for this reason that we strongly recommend that anyone who takes their science seriously should be figuring out ways to get their analysis into Stan.
+And it is for this reason that we strongly recommend that anyone who takes their science seriously should be figuring out ways to get their analysis into Stan. Hopefully this helps!
 
 And that's it folks! Contact me at bbbales2@gmail.com (or on the Stan forums) if you have any questions about any part of this.
 

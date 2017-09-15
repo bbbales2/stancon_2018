@@ -1,10 +1,10 @@
 data {
-  int<lower = 1> N;
-  int<lower = 1> M;
-  real<lower = 0.0> y[M];
-  real m;
+  int<lower = 1> N; // Number of point masses
+  real<lower = 0.0> y[N - 1]; // Data
+  real m; // Mass of particles
 }
 transformed data {
+  // This matrix is constant. We build it once
   matrix[N, N] K_unscaled = rep_matrix(0, N, N);
   
   for(n in 1:N) {
@@ -26,17 +26,19 @@ parameters {
   real<lower = 0.0> sigma;
 }
 transformed parameters {
-  vector[M] eigs;
+  vector[N - 1] eigs;
   
   {
     matrix[N, N] K = k * K_unscaled;
     
-    eigs = eigenvalues_sym(K)[2:(M + 1)];
+    eigs = eigenvalues_sym(K)[2:N];
   }
 }
 model {
   k ~ normal(1.0, 1.0);
   sigma ~ normal(0.0, 1.0);
   
+  // Don't forget, the resonance frequencies are the square roots of the
+  // eigenvalues
   y ~ normal(sqrt(eigs), sigma);
 }
