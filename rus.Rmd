@@ -1,11 +1,12 @@
 ---
 title: "Bayesian Estimation of Mechanical Elastic Constants"
-author: "Ben Bales and Brent Goodlet (University of California, Santa Barbara)"
+author: Ben Bales, Brent Goodlet, Tresa Pollock, Linda Petzold (University of California,
+  Santa Barbara)
 bibliography: bibliography.bib
 output:
-  pdf_document: default
   html_notebook: default
   html_document: default
+  pdf_document: default
 nocite: |
   @stan_math, @cpp_extern
 Extension: simple_tables, multiline_tables
@@ -17,7 +18,7 @@ This is a write-up of the experience we (two engineering graduate students) had 
 
 We started off using Bayesian inference on our problem because the optimization techniques we tried weren't working. At the recommendation of a coworker, we made a small sampler using Radford Neal's "MCMC Using Hamiltonian Dynamics" paper [@radford2012] and it surprised us how well it worked (and how consistently reasonable the answers were). Eventually we moved to Stan to take advantage advanced samplers and modeling language flexibility.
 
-We'll save the preaching for the conclusion, but it's our opion that everyone out there with little science codes should be hooking them up to Stan. Be they weird ODEs, or complex PDEs, or whatever. This notebook is here to facilitate this.
+We'll save the preaching for the conclusion, but it's our opinion that everyone out there with little science codes should be hooking them up to Stan. Be they weird ODEs, or complex PDEs, or whatever. This notebook is here to facilitate this.
 
 Shoutouts to Ben Goodrich and Bob Carpenter for walking us through this originally. The implementation here takes advantage of special interfaces in RStan and CmdStan. I'm not sure how well any of this information transfers to the other interfaces (PyStan, MatlabStan, ...).
 
@@ -27,9 +28,9 @@ We start with a little background on our problem. It's optional, but it should h
 
 The problem we worked on was the inference bit of Resonance Ultrasound Spectroscopy (or more shortly, RUS). RUS is the process of extracting elastic constants (how difficult an object is to stretch and deform) of a material by measuring the resonance modes (frequencies) of a sample of that material.
 
-Musical instruments are the standard examples of mechanical resonance at work, though occasionally a bridge will do it as well. The important bit is that the shape and materials of the thing determine at what frequencies it resonates. For the most part, we know how things are shaped, and we can measure where they resonate, and so the RUS game is all about backing out the elastic constants (a couple standard references on this are [@visscher1991c] and [@migliori1993c]).
+Musical instruments are the standard examples of mechanical resonance at work, though the more exciting examples are bridges. The important bit is that the shape and materials of the instrument/bridge determine at what frequencies it resonates. For the most part, we know how things are shaped, and we can measure where they resonate, and so the RUS game is all about backing out the elastic constants (a couple standard references on this are [@visscher1991c] and [@migliori1993c]).
 
-![*This is the Millenium Bridge in London. When it opened, feedback between people walking on the bridge and small horizontal movements of the bridge drove the bridge until it visibly oscillated (there are good videos of this on [YouTube](https://www.youtube.com/watch?v=eAXVa__XWZ8)). Picture from [Wikipedia](https://upload.wikimedia.org/wikipedia/commons/3/38/Millenium_bridge_2015.jpg)*](millenium_bridge.jpg)
+![*This is the Millenium Bridge in London. When it opened, feedback between peoples' footsteps and small horizontal movements of the bridge led to visible oscillations in the structure (there are good videos of this on [YouTube](https://www.youtube.com/watch?v=eAXVa__XWZ8)). Picture from [Wikipedia](https://upload.wikimedia.org/wikipedia/commons/3/38/Millenium_bridge_2015.jpg)*](millennium_bridge.jpg)
 
 We don't work with musical instruments or bridges though. The driving application here is gas turbines (see: jet engines, and land based gas power generation). The bits of the gas turbine that need to get hot (the blades and the rotor especially) are made of special, high temperature resistant metals called superalloys. It's the elastic constants of superalloys that we want to know.
 
@@ -41,7 +42,7 @@ For superalloys, RUS gives us a few things:
 
 This all goes into operating turbines safely at high temperatures (which makes them more efficient).
 
-The actual experiment works by vibrating the sample at a range frequencies and then measuring the amplitude of the response. If there is a very high peak, it is recorded as a resonance mode (this process is mostly automated).
+The actual experiment works by vibrating the sample at a range frequencies and then measuring the amplitude of the response. If there is a very high peak, it is recorded as a resonance mode. This process is mostly automated. Sometimes a resonance mode does not show up, but, for the most part, the sample can be wiggled and moved around until it appears. The lowest frequency resonance modes are the hardest to measure consistently.
 
 Here's a picture of a typical RUS cradle with a little sample resting in it.
 
@@ -59,7 +60,7 @@ Because the springs are linear, we can model the forces in this system with Hook
 F = -k d\\
 \end{align}
 
-$F$ is force exerted by the spring (trying to return to its resting length), $d$ is displacement of the spring (away from its resting length), and $k$ is the spring constant.
+$F$ is force exerted by the spring, $d$ is displacement of the spring (away from its resting length), and $k$ is the spring constant.
 
 Assuming all the springs in our system have the same elastic constant and all the point masses weigh the same, we can sum the forces and write out the ODE which governs the movement of each point mass. The ODEs in terms of the displacements ($d_i$) of the point masses from their resting positions (to avoid the resting length of the springs showing up in the equations).
 
@@ -79,7 +80,7 @@ m \frac{\partial ^2 d}{\partial t^2} = \begin{bmatrix}
 \end{bmatrix} d
 \end{equation}
 
-The matrix on the right hand side is called the stiffness matrix (and usually denoted $K$ for short). Because resonance is a steady state phenomena and we're working with linear systems, we can instead look at the Fourier transform of our system:
+The matrix on the right hand side is called the stiffness matrix (and usually denoted $K$ for short). Because resonance is a steady state phenomena and we're working with linear systems, we instead look at the Fourier transform of our system:
 
 \begin{align}
 -m \omega^2 \hat{d} = K \hat{d} \\
@@ -158,13 +159,13 @@ Now, we just repeat these calculations in a Stan model to do our inference:
 cat "models/spring_example.stan"
 ```
 Then we run the fit:
-
 ```{r, results="hide"}
-timing_base = system.time(fit_base <- stan("models/spring_example.stan",
-                                           data = list(N = N,
-                                                       M = nrow(data),
-                                                       y = data$ynoise,
-                                                       m = m), iter = 1000, chains = 4, cores = 4))
+model_external = stan_model("models/spring_example.stan")
+timing_base = system.time(fit_base <- sampling(model_external,
+                                               data = list(N = N,
+                                                           M = nrow(data),
+                                                           y = data$ynoise,
+                                                           m = m), iter = 1000, chains = 4, cores = 4))
 ```
 
 ```{r}
@@ -197,7 +198,7 @@ grep -m 1 -B2 "eigenvalues_sym_external" spring_example_external_model.cpp
 ```
 This is the function we need to define externally.
 
-First, a quick message about types. All functions you interface with Stan will be templated on non-integer types. The two template types you need to worry about (the two types that ```T0__``` can take in this case) are ```double``` and ```var```. Basically, ```double``` is used in situations where no autodiff is needed, and ```var``` is used in places where the autodiff is needed. ```var```s are special types which, when just evaluating functions, act like doubles. In the background, however, they build special evalulation trees which can be used to get the gradients of whatever function they're used in. It's a bit finicky to describe, but to interface with the C++ side of Stan at any reasonable level you'll need to familiarize yourself with them. The best way to do that is the [Stan Math paper](https://arxiv.org/abs/1509.07164).
+First, a quick message about types. All functions you interface with Stan will be templated on non-integer types. The two template types you need to worry about (the two types that ```T0__``` can take in this case) are ```double``` and ```var```. Basically, ```double``` is used in situations where no autodiff is needed, and ```var``` is used in places where the autodiff is needed. ```var```s are special types which, when just evaluating functions, act like ```double```s. In the background, however, they build special evaluation trees which can be used to get the gradients of whatever function they're used in. It's a bit finicky to describe, but to interface with the C++ side of Stan at any reasonable level you'll need to familiarize yourself with them. The best way to do that is the [Stan Math paper](https://arxiv.org/abs/1509.07164).
 
 Either way, our function definition is a bit messy, but it's actually very easy to write (we do this in a separate C++ header file):
 ```{bash}
@@ -205,7 +206,7 @@ cat eigenvalues_eigen.hpp
 ```
 Because we're just passing the ```var```s through (well, they're ```T0__```s here, but they will be ```var```s), all the gradients we need are computed automatically. Now all we need to do is run the model.
 
-We need to tell Rstan to allow undefined functions (so the Stan->C++ compilation will continue even though ```eigenvalues_sym_external``` isn't defined at that point) and the point to the header where the function is actually defined (for more details on this, again, check the [Vignette](https://cran.r-project.org/web/packages/rstan/vignettes/external.html)):
+We need to tell RStan to allow undefined functions (so the Stan->C++ compilation will continue even though ```eigenvalues_sym_external``` isn't defined at that point) and to point to the header where the function is actually defined (for more details on this, again, check the [Vignette](https://cran.r-project.org/web/packages/rstan/vignettes/external.html)):
 
 ```{r, results="hide"}
 model_external = stan_model("models/spring_example_external.stan",
@@ -228,7 +229,7 @@ Again we've recovered our parameter ($k = 1.7$), good work us!
 
 ### Eigenvalues with custom gradients
 
-The last piece we need to really incorporate custom code in Stan are custom gradients. In particular, for our problem, there's no reason to make the autodiff compute the gradients of a symmetric eigenvalue problem. When they exist, there is a simple analytic form for them [@deleeuw2007]. For the eigenvalue problem (again, I hid $-m$ inside the $K$ here)
+The last piece we need to really incorporate custom code in Stan are custom gradients. In particular, for our problem, there's no reason to make the autodiff compute the gradients of a symmetric eigenvalue problem. When they exist, there is a simple analytic form [@deleeuw2007]. For the eigenvalue problem (again, I hid $-m$ inside the $K$ here)
 
 \begin{align}
 \omega_i^2 \hat{x} = K \hat{x}
@@ -285,7 +286,7 @@ print(fit_external_gradients, c("k", "sigma"))
 print(timing_external_gradients)
 ```
 
-Woohoo! Our fit works ($k = 1.7$), and it's even a little faster! This is how you hook up custom external libraries with Stan models. Your mileage may vary, of course (especially if you have to link in other libraries), and it's best to test that the functions (as well as their gradients) are working outside of Stan before you try to incorporate them into a complicated model.
+Woohoo! Our fit works ($k = 1.7$, and it's even a little faster if you check the timings)! This is how you hook up custom external libraries with Stan models. Your mileage may vary, of course (especially if you have to link in other libraries), and it's best to test that the functions (as well as their gradients) are working outside of Stan before you try to incorporate them into a complicated model.
 
 Once it's all together though, you can bask in all the benefits that Stan modeling brings (including the optimizer, which makes it really easy to compare your sampling stuff with optimization to justify all that work you did to get your code in Stan).
 
@@ -327,7 +328,7 @@ Also, in single crystal materials, the alignment between the crystal axes and th
 C^{\text{effective}}_{ijkl} = q_{ip} q_{jq} C^{\text{unrotated}}_{pqrs} q_{kr} q_{ls}
 \end{equation}
 
-We estimate the misorientation ($q$) online. It's possible to measure these things accurately with x-ray diffraction, but it is time consuming and difficult. Instead, we infer it as part of our problem. This means sampling in the space of 3D rotations, which is a bit of a trick.
+We estimate the misorientation ($q$) online. It's possible to measure these things accurately with X-ray diffraction, but it is time consuming and difficult. Instead, we infer it as part of our problem. This means sampling in the space of 3D rotations, which is a bit of a trick.
 
 ## State of the modeling
 
@@ -335,7 +336,7 @@ The code for these calculations is probably not of general interest, but there i
 
 The current issues with our modeling are:
 
-1. We work with single sample fits. We are overfitting things at this point
+1. We work with single sample fits. We are over fitting things at this point
 2. Not all chains converge to a reasonable solution (some get stuck in places of parameter space far away from the data). We just discard these
 3. The posteriors are frighteningly tight
 4. Orientations are difficult to work with
@@ -344,9 +345,9 @@ The current issues with our modeling are:
 At this point, we don't really trust our confidence intervals. It seems weird saying this in a notebook promoting Bayesian analysis, but we just aren't there yet.
 
 ### Titanium results (cubic symmetry, no misorientation necessary)
-The data for this is 30 resonance modes collected from a 1.3cm x 0.9cm x 0.7cm block of Titanium. This calculation was done with four chains, 500 warmup iterations and 500 post-warmup iterations. For the results I've included here, all four chains converged to the same (physical) answer. Of the sixteen simulations run in the preparation of this notebook, seven failed to find a reasonable solution.
+The data for this is 30 resonance modes collected from a 1.3cm x 0.9cm x 0.7cm block of Titanium. This calculation was done with four chains, 500 warm-up iterations and 500 post-warm up iterations. For the results I've included here, all four chains converged to the same (physical) answer. Of the sixteen simulations run in the preparation of this notebook, seven failed to find a reasonable solution.
 
-The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/ti.20modes.dat) are available on Github.
+The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/ti.dat) are available on Github.
 
 Since we're really only fitting one data point here, it is convenient to plot the difference between the data and the posterior predictives (so we're looking directly at the errors)
 
@@ -378,6 +379,7 @@ extract(fit, c('yhat'))$yhat %>%
   geom_point(aes(mode, median)) +
   geom_hline(aes(yintercept = 0.0), color = "red") +
   xlab("Resonance modes") +
+  ylab("Error (Khz)") +
   ggtitle("Medians and 95% posterior intervals of error (yrep - y)\n(Red line is data)")
 ```
 We're within the 95% posterior intervals here, but it is curious that collections of resonance modes seem to be together above or below the data.
@@ -395,9 +397,11 @@ The reference values for the table come from [@fisher1964].
   \end{array}
 \end{align}
 
+We haven't discussed it yet, but this is a good time to mention that the $\sigma$ in this model contains more than measurement noise. Measurement noise in these experiments is very small ($<50Hz$, if measurements are repeated on the same sample). The variation in measured resonance modes comes sample to sample. Presumably this is due to details we are not modeling here, such as the conditions under which the sample was made.
+
 ### CMSX-4 results (cubic symmetry, must estimate misorientation)
 
-This calculation was done with four chains, 500 warmup iterations and 500 post-warmup iterations. Three of the four chains converged to the same solutions. Overall, of about sixteen chains run in preparation for this notebook, four failed.
+This calculation was done with four chains, 500 warm-up iterations and 500 post-warm-up iterations. Three of the four chains converged to the same solutions. Overall, of about sixteen chains run in preparation for this notebook, four failed.
 
 The [model](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cubic_w_rotations.stan) and [data](https://github.com/bbbales2/cmdstan-rus/blob/develop/examples/cmsx4.20modes.dat) are available on Github.
 
@@ -427,11 +431,12 @@ extract(fit, c('yhat'))$yhat %>%
   geom_linerange(aes(ymin = q25, ymax = q975)) +
   geom_point(aes(mode, median)) +
   geom_hline(aes(yintercept = 0.0), color = "red") +
+  ylab("Error (Khz)") +
   xlab("Resonance modes") +
   ggtitle("Medians and 95% posterior intervals of error (yrep - y)\n(Red line is data)")
 ```
 
-The reference data for the comparison comes from [@sieborger2001].
+The reference data for the comparison comes from [@sieborger2001]. What we might call an unreasonable fit is included as well to highlight how easy it is to tell it apart from a reasonable one (That $c_{44}$ is incredibly large, and the error ($\sigma$) in the fit is huge).
 
 \begin{align}
   \begin{array}{c | c | c c c | c}
@@ -456,7 +461,7 @@ read_csv("min_angles.txt", col_types = c(col_double()), col_names = c("angles"))
   xlab("Minimum angle of rotation between measured and estimated orientations")
 ```
 
-These sorts of X-ray measurements can be much more precisely than to within a degree. So it is not great we're only within a couple degrees of the answer. We're not that confident in the X-ray measurement we did though.
+These sorts of X-ray measurements can be much more precisely than a degree. So it is not great we're only within a couple degrees of the answer. We're not that confident in the X-ray measurement we did though.
 
 For what it's worth, parameterizing our model with quaternions (```unit_vector[4]```s) didn't work that well. The sampler was frequently hitting it's maximum treedepth. There's a thread on it on the [Stan forums](http://discourse.mc-stan.org/t/riemannian-hmc-q/523). In the end we switched to using a Cubochoric parameterization [@degraef] and the treedepth problems went away.
 
@@ -464,11 +469,11 @@ For what it's worth, parameterizing our model with quaternions (```unit_vector[4
 
 Looking back on the project, the big mistake we made at the beginning was assuming that because we have a simple mechanical problem (linear elasticity is quite easy) that it should also be easy to solve an inference problem attached to this. Hopefully the reader is convinced this was a wrong assumption.
 
-And again, with all the problems above, we haven't really solved our inference problem yet. I don't truly trust the confidence intervals, which sounds pretty defeatist from a Bayesian modeling perspective.
+And with all the problems enumerated above, we haven't fully solved our inference problem yet. We've made progress, and the results are within the ballpark. I don't truly trust the confidence intervals though, and that might sound pretty defeatist from a Bayesian modeling perspective.
 
-But I'm not convinced anymore that the confidence intervals are all we might hope to get from this. We are much closer than ever before to understanding our problem, and Stan is indispensable as a tool for interrogating our models, data, and assumptions. Even now, when we have what we consider a functional model, it is very clear what our biggest weaknesses are and how we might address these concerns.
+But I'm not convinced anymore that the confidence intervals are all that we might get from Bayesian modeling. We are much closer than ever before to understanding our problem, and Stan has been indispensable as a tool for interrogating our models, data, and assumptions. Even now, when we have what we consider a functional model, it is very clear what our biggest weaknesses are and how we might address these concerns.
 
-And it is for this reason that we strongly recommend that anyone who takes their science seriously should be figuring out ways to get their analysis into Stan. Hopefully this helps!
+It is for this reason that we strongly recommend that all our computational scientist friends should be figuring out ways to get their analysis into Stan. Hopefully this helps!
 
 And that's it folks! Contact me at bbbales2@gmail.com (or on the Stan forums) if you have any questions about any part of this.
 
