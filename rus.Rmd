@@ -4,8 +4,8 @@ author: Ben Bales, Brent Goodlet, Tresa Pollock, Linda Petzold (University of Ca
   Santa Barbara)
 bibliography: bibliography.bib
 output:
-  html_notebook: default
   html_document: default
+  html_notebook: default
   pdf_document: default
 nocite: |
   @stan_math, @cpp_extern
@@ -188,13 +188,15 @@ functions {
 }
 ```
 
-Once we have that, we need to figure out what function we need to define in C++ so that Stan can call it. Stan models are compiled from Stan to C++ before being compiled to a binary and executed. We can get the C++ function signature by just doing Stan->C++ conversion and looking at the intermediate file. This is most easily done with the ```stanc``` utility in CmdStan:
+Once we have that, we need to figure out what function we need to define in C++ so that Stan can call it. Stan models are compiled from Stan to C++ before being compiled to a binary and executed. We can get the C++ function signature by just doing Stan->C++ conversion and looking at the intermediate file. This is most easily done with the ```stanc``` function in RStan:
 
-```{bash}
+```{r}
 # The --allow_undefined flag is used here to keep Stan from throwing errors saying that
 # "eigenvalues_sym_external" is not part of the math library
-/home/bbales2/cmdstan/bin/stanc --allow_undefined models/spring_example_external.stan > /dev/null
-grep -m 1 -B2 "eigenvalues_sym_external" spring_example_external_model.cpp
+cpp_src = stanc("models/spring_example_external.stan", allow_undefined = TRUE)$cppcode
+cpp_src_split = strsplit(cpp_src, "\n")[[1]]
+first_match = grep("eigenvalues_sym_external", cpp_src_split)[[1]]
+cat(cpp_src_split[(first_match - 2) : first_match], sep = "\n")
 ```
 This is the function we need to define externally.
 
@@ -254,9 +256,11 @@ functions {
 
 Again, we can use ```stanc``` to back out the signature we need to define:
 
-```{bash}
-/home/bbales2/cmdstan/bin/stanc --allow_undefined models/spring_example_external_gradients.stan > /dev/null
-grep -m 1 -B2 -A1 "eigenvalues_sym_external_gradients" spring_example_external_gradients_model.cpp
+```{r}
+cpp_src = stanc("models/spring_example_external_gradients.stan", allow_undefined = TRUE)$cppcode
+cpp_src_split = strsplit(cpp_src, "\n")[[1]]
+first_match = grep("eigenvalues_sym_external_gradients", cpp_src_split)[[1]]
+cat(cpp_src_split[(first_match - 2) : first_match], sep = "\n")
 ```
 
 The code with the custom autodiffs is complicated by the fact that we need to differentiate between when the template arguments are ```double```s or ```var```s. If the input includes ```var```s, then we need to get all the necessary partial derivatives together and package them in the output. If the input is only ```double```, then we can get away without computing any gradients.
