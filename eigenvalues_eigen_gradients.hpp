@@ -55,6 +55,22 @@ eigenvalues_sym_external_gradients
   Eigen::VectorXd evals = solver.eigenvalues();
   Eigen::MatrixXd evecs = solver.eigenvectors();
   
-  // This function will need to 
+  // Depending on whether or not we want to include partial derivatives, we
+  // build the output differently.
   return build_output(K_unscaled_double, k, evals, evecs);
+}
+
+// If K_scaled is a var, error. Our custom autodiff doesn't handle that
+template <typename T1__>
+Eigen::Matrix<T1__, Eigen::Dynamic,1>
+eigenvalues_sym_external_gradients
+  (const Eigen::Matrix<var, Eigen::Dynamic,Eigen::Dynamic>& K_unscaled,
+   const T1__& k, std::ostream* pstream__) {
+  // std::invalid_arguments will totally stop the sampling
+  // std::domain_errors will just cause the sample to get rejected
+  throw std::invalid_argument("Argument 1 (K_unscaled) to "
+                              "eigenvalues_sym_external_gradients must be "
+                              "a matrix of doubles (no autodiff variables)");
+  
+  return Eigen::Matrix<T1__, Eigen::Dynamic,1>();
 }
